@@ -1,7 +1,7 @@
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::{
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Tabs, Wrap},
@@ -219,6 +219,17 @@ impl Tab {
     }
 }
 
+// ── Hit-test areas (updated each frame) ──
+
+#[derive(Default, Clone, Copy)]
+struct Areas {
+    tab_bar: Rect,
+    list: Rect,
+    // group view
+    gv_sub_tabs: Rect,
+    gv_list: Rect,
+}
+
 // ── App state ──
 
 struct App {
@@ -230,6 +241,7 @@ struct App {
     group_state: ListState,
     expense_state: ListState,
     group_view: Option<GroupView>,
+    areas: Areas,
     should_quit: bool,
 }
 
@@ -250,6 +262,7 @@ impl App {
             group_state: ListState::default(),
             expense_state: ListState::default(),
             group_view: None,
+            areas: Areas::default(),
             should_quit: false,
         };
         if !app.friends.is_empty() {
@@ -396,7 +409,9 @@ pub fn run(client: &Client) -> Result<()> {
     eprintln!(" done.");
 
     let mut terminal = ratatui::init();
+    crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
     let result = event_loop(&mut terminal, &mut app, client);
+    crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)?;
     ratatui::restore();
     result
 }
@@ -405,45 +420,45 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, client: &Client) ->
     loop {
         terminal.draw(|frame| ui(frame, app))?;
 
-        if let Event::Key(key) = event::read()? {
-            if key.kind != KeyEventKind::Press {
-                continue;
-            }
-
-            // Inside group drill-down
-            if let Some(gv) = &mut app.group_view {
-                match key.code {
-                    KeyCode::Esc | KeyCode::Backspace => app.exit_group(),
-                    KeyCode::Char('q') => app.should_quit = true,
-                    KeyCode::Tab => gv.tab = gv.tab.next(),
-                    KeyCode::BackTab => gv.tab = gv.tab.prev(),
-                    KeyCode::Char('1') => gv.tab = GroupTab::Members,
-                    KeyCode::Char('2') => gv.tab = GroupTab::Expenses,
-                    KeyCode::Char('3') => gv.tab = GroupTab::Debts,
-                    KeyCode::Down | KeyCode::Char('j') => gv.move_down(),
-                    KeyCode::Up | KeyCode::Char('k') => gv.move_up(),
-                    KeyCode::Char('g') | KeyCode::Home => gv.jump_top(),
-                    KeyCode::Char('G') | KeyCode::End => gv.jump_bottom(),
-                    KeyCode::Char('r') => app.refresh(client),
-                    _ => {}
-                }
-            } else {
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
-                    KeyCode::Enter => app.enter_group(client),
-                    KeyCode::Tab => app.tab = app.tab.next(),
-                    KeyCode::BackTab => app.tab = app.tab.prev(),
-                    KeyCode::Char('1') => app.tab = Tab::Friends,
-                    KeyCode::Char('2') => app.tab = Tab::Groups,
-                    KeyCode::Char('3') => app.tab = Tab::Expenses,
-                    KeyCode::Down | KeyCode::Char('j') => app.move_down(),
-                    KeyCode::Up | KeyCode::Char('k') => app.move_up(),
-                    KeyCode::Char('g') | KeyCode::Home => app.jump_top(),
-                    KeyCode::Char('G') | KeyCode::End => app.jump_bottom(),
-                    KeyCode::Char('r') => app.refresh(client),
-                    _ => {}
+        match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                // Inside group drill-down
+                if let Some(gv) = &mut app.group_view {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Backspace => app.exit_group(),
+                        KeyCode::Char('q') => app.should_quit = true,
+                        KeyCode::Tab => gv.tab = gv.tab.next(),
+                        KeyCode::BackTab => gv.tab = gv.tab.prev(),
+                        KeyCode::Char('1') => gv.tab = GroupTab::Members,
+                        KeyCode::Char('2') => gv.tab = GroupTab::Expenses,
+                        KeyCode::Char('3') => gv.tab = GroupTab::Debts,
+                        KeyCode::Down | KeyCode::Char('j') => gv.move_down(),
+                        KeyCode::Up | KeyCode::Char('k') => gv.move_up(),
+                        KeyCode::Char('g') | KeyCode::Home => gv.jump_top(),
+                        KeyCode::Char('G') | KeyCode::End => gv.jump_bottom(),
+                        KeyCode::Char('r') => app.refresh(client),
+                        _ => {}
+                    }
+                } else {
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
+                        KeyCode::Enter => app.enter_group(client),
+                        KeyCode::Tab => app.tab = app.tab.next(),
+                        KeyCode::BackTab => app.tab = app.tab.prev(),
+                        KeyCode::Char('1') => app.tab = Tab::Friends,
+                        KeyCode::Char('2') => app.tab = Tab::Groups,
+                        KeyCode::Char('3') => app.tab = Tab::Expenses,
+                        KeyCode::Down | KeyCode::Char('j') => app.move_down(),
+                        KeyCode::Up | KeyCode::Char('k') => app.move_up(),
+                        KeyCode::Char('g') | KeyCode::Home => app.jump_top(),
+                        KeyCode::Char('G') | KeyCode::End => app.jump_bottom(),
+                        KeyCode::Char('r') => app.refresh(client),
+                        _ => {}
+                    }
                 }
             }
+            Event::Mouse(mouse) => handle_mouse(app, client, mouse),
+            _ => {}
         }
 
         if app.should_quit {
@@ -453,11 +468,112 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, client: &Client) ->
     Ok(())
 }
 
+fn handle_mouse(app: &mut App, client: &Client, mouse: crossterm::event::MouseEvent) {
+    let col = mouse.column;
+    let row = mouse.row;
+
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            if let Some(gv) = &mut app.group_view {
+                // Click sub-tabs
+                if let Some(idx) = tab_hit(app.areas.gv_sub_tabs, col, row, GroupTab::ALL.len()) {
+                    gv.tab = GroupTab::ALL[idx];
+                    return;
+                }
+                // Click list item
+                if let Some(clicked) = list_hit(app.areas.gv_list, col, row) {
+                    let (state, len) = match gv.tab {
+                        GroupTab::Members => (&mut gv.member_state, gv.group.members.len()),
+                        GroupTab::Expenses => (&mut gv.expense_state, gv.expenses.len()),
+                        GroupTab::Debts => {
+                            let len = gv.debts().len();
+                            let idx = (clicked + 0).min(len.saturating_sub(1)); // debt uses raw index
+                            gv.debt_idx = idx;
+                            return;
+                        }
+                    };
+                    let idx = clicked + state.offset();
+                    if idx < len {
+                        state.select(Some(idx));
+                    }
+                }
+            } else {
+                // Click top tabs
+                if let Some(idx) = tab_hit(app.areas.tab_bar, col, row, Tab::ALL.len()) {
+                    app.tab = Tab::ALL[idx];
+                    return;
+                }
+                // Click list item
+                if let Some(clicked) = list_hit(app.areas.list, col, row) {
+                    let (state, len) = match app.tab {
+                        Tab::Friends => (&mut app.friend_state, app.friends.len()),
+                        Tab::Groups => (&mut app.group_state, app.groups.len()),
+                        Tab::Expenses => (&mut app.expense_state, app.expenses.len()),
+                    };
+                    let idx = clicked + state.offset();
+                    if idx < len {
+                        // Double-click: if already selected, enter group
+                        if app.tab == Tab::Groups && state.selected() == Some(idx) {
+                            app.enter_group(client);
+                            return;
+                        }
+                        state.select(Some(idx));
+                    }
+                }
+            }
+        }
+        MouseEventKind::ScrollUp => {
+            if let Some(gv) = &mut app.group_view {
+                gv.move_up();
+            } else {
+                app.move_up();
+            }
+        }
+        MouseEventKind::ScrollDown => {
+            if let Some(gv) = &mut app.group_view {
+                gv.move_down();
+            } else {
+                app.move_down();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Returns which tab index was clicked (0-based), if any.
+fn tab_hit(area: Rect, col: u16, row: u16, count: usize) -> Option<usize> {
+    if area.width == 0 || count == 0 {
+        return None;
+    }
+    // Tab bar has a 1-cell border; content row is y+1
+    if row < area.y + 1 || row >= area.y + area.height.saturating_sub(1) {
+        return None;
+    }
+    if col <= area.x || col >= area.x + area.width.saturating_sub(1) {
+        return None;
+    }
+    let inner_w = area.width.saturating_sub(2) as usize;
+    let x_in = (col - area.x - 1) as usize;
+    let idx = x_in * count / inner_w;
+    if idx < count { Some(idx) } else { None }
+}
+
+/// Returns the visible row index (0-based) clicked inside a bordered list.
+fn list_hit(area: Rect, col: u16, row: u16) -> Option<usize> {
+    if col <= area.x || col >= area.x + area.width.saturating_sub(1) {
+        return None;
+    }
+    if row <= area.y || row >= area.y + area.height.saturating_sub(1) {
+        return None;
+    }
+    Some((row - area.y - 1) as usize)
+}
+
 // ── UI ──
 
 fn ui(frame: &mut Frame, app: &mut App) {
-    if let Some(gv) = &mut app.group_view {
-        render_group_view(frame, gv);
+    if app.group_view.is_some() {
+        render_group_view(frame, app);
         return;
     }
 
@@ -467,6 +583,9 @@ fn ui(frame: &mut Frame, app: &mut App) {
         Constraint::Length(1),
     ])
     .areas(frame.area());
+
+    // Store areas for mouse hit-testing
+    app.areas.tab_bar = tab_area;
 
     // ── Tabs ──
     let titles: Vec<&str> = Tab::ALL.iter().map(|t| t.title()).collect();
@@ -485,6 +604,8 @@ fn ui(frame: &mut Frame, app: &mut App) {
         Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)])
             .areas(main_area);
 
+    app.areas.list = list_area;
+
     match app.tab {
         Tab::Friends => render_friends(frame, app, list_area, detail_area),
         Tab::Groups => render_groups(frame, app, list_area, detail_area),
@@ -493,11 +614,10 @@ fn ui(frame: &mut Frame, app: &mut App) {
 
     // ── Status bar ──
     let help = status_bar(&[
-        ("j/k", "nav"),
+        ("click", "select"),
+        ("scroll", "nav"),
         ("Enter", "open"),
         ("Tab", "switch"),
-        ("1-3", "jump"),
-        ("g/G", "top/btm"),
         ("r", "refresh"),
         ("q", "quit"),
     ]);
@@ -518,7 +638,7 @@ fn status_bar<'a>(bindings: &[(&'a str, &'a str)]) -> Paragraph<'a> {
 
 // ── Group drill-down view ──
 
-fn render_group_view(frame: &mut Frame, gv: &mut GroupView) {
+fn render_group_view(frame: &mut Frame, app: &mut App) {
     let [header_area, tab_area, main_area, status_area] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Length(3),
@@ -526,6 +646,11 @@ fn render_group_view(frame: &mut Frame, gv: &mut GroupView) {
         Constraint::Length(1),
     ])
     .areas(frame.area());
+
+    // Store areas for mouse hit-testing
+    app.areas.gv_sub_tabs = tab_area;
+
+    let gv = app.group_view.as_mut().unwrap();
 
     // ── Group header ──
     let gtype = gv.group.group_type.as_deref().unwrap_or("");
@@ -567,6 +692,9 @@ fn render_group_view(frame: &mut Frame, gv: &mut GroupView) {
         Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
             .areas(main_area);
 
+    app.areas.gv_list = list_area;
+    let gv = app.group_view.as_mut().unwrap();
+
     match gv.tab {
         GroupTab::Members => render_gv_members(frame, gv, list_area, detail_area),
         GroupTab::Expenses => render_gv_expenses(frame, gv, list_area, detail_area),
@@ -575,9 +703,9 @@ fn render_group_view(frame: &mut Frame, gv: &mut GroupView) {
 
     // ── Status bar ──
     let help = status_bar(&[
-        ("j/k", "nav"),
+        ("click", "select"),
+        ("scroll", "nav"),
         ("Tab", "switch"),
-        ("1-3", "jump"),
         ("r", "refresh"),
         ("Esc", "back"),
         ("q", "quit"),
