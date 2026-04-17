@@ -2,6 +2,7 @@ mod client;
 mod config;
 mod display;
 mod models;
+mod tui;
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
@@ -10,7 +11,11 @@ use clap::{Parser, Subcommand};
 #[command(name = "splitwise", about = "Splitwise CLI", version)]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
+
+    /// Launch interactive TUI
+    #[arg(long)]
+    tui: bool,
 
     /// Output raw JSON
     #[arg(long, short, global = true)]
@@ -216,10 +221,24 @@ macro_rules! json_or {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+
+    if cli.tui {
+        let token = config::load_token()?;
+        let client = client::Client::new(token);
+        return tui::run(&client);
+    }
+
+    let Some(command) = cli.command else {
+        use clap::CommandFactory;
+        Cli::command().print_help()?;
+        println!();
+        return Ok(());
+    };
+
     let json = cli.json;
 
     // Auth doesn't need a token
-    if let Command::Auth { key } = &cli.command {
+    if let Command::Auth { key } = &command {
         config::save_token(key)?;
         println!("API key saved.");
         return Ok(());
@@ -228,7 +247,7 @@ fn run() -> Result<()> {
     let token = config::load_token()?;
     let client = client::Client::new(token);
 
-    match cli.command {
+    match command {
         Command::Auth { .. } => unreachable!(),
 
         Command::Me => {
