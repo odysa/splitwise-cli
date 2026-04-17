@@ -20,7 +20,7 @@ pub struct UserResponse {
 
 // ── Group ──
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Group {
     pub id: u64,
     pub name: String,
@@ -35,7 +35,7 @@ pub struct Group {
     pub simplified_debts: Vec<Debt>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupMember {
     pub id: u64,
     pub first_name: String,
@@ -45,7 +45,7 @@ pub struct GroupMember {
     pub balance: Vec<Balance>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Debt {
     pub from: u64,
     pub to: u64,
@@ -77,7 +77,7 @@ pub struct Friend {
     pub groups: Vec<GroupBalance>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Balance {
     pub currency_code: String,
     pub amount: String,
