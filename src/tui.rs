@@ -902,16 +902,16 @@ fn render_gv_charts(frame: &mut Frame, gv: &GroupView, area: Rect) {
     let mut spending_sorted: Vec<(String, f64)> = member_spending.into_values().collect();
     spending_sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     let max_spent = spending_sorted.iter().map(|(_, v)| *v).fold(0.0_f64, f64::max).max(1.0);
-    let bar_max = (spending_area.width as usize).saturating_sub(22).max(5);
+    // inner width = panel width - 2 (borders); label "  name          " = 16; " amount" = 10
+    let inner_w = (spending_area.width as usize).saturating_sub(2);
+    let bar_max = inner_w.saturating_sub(26).max(1);
 
-    let mut spending_lines: Vec<Line<'static>> = vec![
-        Line::raw(""),
-    ];
+    let mut spending_lines: Vec<Line<'static>> = vec![Line::raw("")];
     for (name, amount) in &spending_sorted {
         let bar_w = ((*amount / max_spent) * bar_max as f64) as usize;
         let bar: String = "\u{2588}".repeat(bar_w.max(1));
         spending_lines.push(Line::from(vec![
-            Span::styled(format!("  {:<12} ", trunc(name, 12)), Style::default().fg(FG)),
+            Span::styled(format!(" {:<12} ", trunc(name, 12)), Style::default().fg(FG)),
             Span::styled(bar, Style::default().fg(GREEN)),
             Span::styled(format!(" {amount:.2}"), Style::default().fg(FG2)),
         ]));
@@ -920,8 +920,7 @@ fn render_gv_charts(frame: &mut Frame, gv: &GroupView, area: Rect) {
         spending_lines.push(Line::styled("  No spending data", Style::default().fg(FG3)));
     }
     let spending_widget = Paragraph::new(spending_lines)
-        .block(block("Spending by Member"))
-        .wrap(Wrap { trim: false });
+        .block(block("Spending by Member"));
     frame.render_widget(spending_widget, spending_area);
 
     // ── Balance summary ──
@@ -931,6 +930,7 @@ fn render_gv_charts(frame: &mut Frame, gv: &GroupView, area: Rect) {
     } else {
         &gv.group.original_debts
     };
+    let bal_inner = (balance_area.width as usize).saturating_sub(2);
     let mut balance_lines: Vec<Line<'static>> = vec![Line::raw("")];
     if debts.is_empty() {
         balance_lines.push(Line::styled(
@@ -942,28 +942,29 @@ fn render_gv_charts(frame: &mut Frame, gv: &GroupView, area: Rect) {
             .map(|d| d.amount.parse::<f64>().unwrap_or(0.0))
             .fold(0.0_f64, f64::max)
             .max(1.0);
-        let debt_bar_max = (balance_area.width as usize).saturating_sub(26).max(5);
+        // debt line: "  from       → to          " = ~28; " amount CUR" = ~14
+        let debt_bar_max = bal_inner.saturating_sub(18).max(1);
         for d in debts {
             let from = names.get(&d.from).map(|s| s.as_str()).unwrap_or("?");
             let to = names.get(&d.to).map(|s| s.as_str()).unwrap_or("?");
             let amt: f64 = d.amount.parse().unwrap_or(0.0);
             let bar_w = ((amt / max_debt) * debt_bar_max as f64) as usize;
             let bar: String = "\u{2593}".repeat(bar_w.max(1));
+            let amt_str = format!("{} {}", d.amount, d.currency_code);
             balance_lines.push(Line::from(vec![
-                Span::styled(format!("  {:<10}", trunc(from, 10)), Style::default().fg(FG)),
+                Span::styled(format!(" {}", trunc(from, 8)), Style::default().fg(FG)),
                 Span::styled(" \u{2192} ", Style::default().fg(FG3)),
-                Span::styled(format!("{:<10} ", trunc(to, 10)), Style::default().fg(FG)),
+                Span::styled(trunc(to, 8), Style::default().fg(FG)),
             ]));
             balance_lines.push(Line::from(vec![
-                Span::raw("  "),
+                Span::raw(" "),
                 Span::styled(bar, Style::default().fg(GOLD)),
-                Span::styled(format!(" {} {}", d.amount, d.currency_code), Style::default().fg(GOLD)),
+                Span::styled(format!(" {amt_str}"), Style::default().fg(GOLD)),
             ]));
         }
     }
     let balance_widget = Paragraph::new(balance_lines)
-        .block(block("Who Owes Whom"))
-        .wrap(Wrap { trim: false });
+        .block(block("Who Owes Whom"));
     frame.render_widget(balance_widget, balance_area);
 
     // ── Monthly spending timeline ──
@@ -973,49 +974,68 @@ fn render_gv_charts(frame: &mut Frame, gv: &GroupView, area: Rect) {
         let month = e.date.as_deref()
             .filter(|d| d.len() >= 7)
             .map(|d| d[..7].to_string())
-            .unwrap_or_else(|| "Unknown".into());
+            .unwrap_or_else(|| "???".into());
         let cost: f64 = e.cost.parse().unwrap_or(0.0);
         *monthly.entry(month).or_default() += cost;
     }
     let months: Vec<(String, f64)> = monthly.into_iter().collect();
     let max_month = months.iter().map(|(_, v)| *v).fold(0.0_f64, f64::max).max(1.0);
-    let timeline_bar_max = (bottom_area.width as usize).saturating_sub(6).max(5);
+    let tl_inner = (bottom_area.width as usize).saturating_sub(2);
+    // label "  MM " = 5; " amount" = 10
+    let timeline_bar_max = tl_inner.saturating_sub(16).max(1);
 
     let mut timeline_lines: Vec<Line<'static>> = vec![Line::raw("")];
     if months.is_empty() {
         timeline_lines.push(Line::styled("  No expense data", Style::default().fg(FG3)));
     } else {
-        // Sparkline row
-        let mut spark_spans: Vec<Span<'static>> = vec![Span::raw("  ")];
-        for (_, val) in &months {
+        // Sparkline row — cap to inner width
+        let spark_max = (tl_inner.saturating_sub(2)) / 4; // each spark = 3 chars + 1 space
+        let spark_months: &[(String, f64)] = if months.len() > spark_max {
+            &months[months.len() - spark_max..]
+        } else {
+            &months
+        };
+        let mut spark_spans: Vec<Span<'static>> = vec![Span::raw(" ")];
+        for (_, val) in spark_months {
             let level = ((*val / max_month) * 8.0) as usize;
             let ch = SPARK[level.min(8)];
-            let intensity = ((*val / max_month) * 255.0) as u8;
-            let color = Color::Rgb(28.min(28 + intensity / 4), 100 + intensity / 2, 60 + intensity / 3);
+            let g = (((*val / max_month) * 155.0) as u8).saturating_add(100);
             spark_spans.push(Span::styled(
                 format!("{ch}{ch}{ch}"),
-                Style::default().fg(color),
+                Style::default().fg(Color::Rgb(28, g, 80)),
             ));
             spark_spans.push(Span::raw(" "));
         }
         timeline_lines.push(Line::from(spark_spans));
+
+        // Month labels under sparkline
+        let mut label_spans: Vec<Span<'static>> = vec![Span::raw(" ")];
+        for (month, _) in spark_months {
+            let lbl = if month.len() >= 7 { &month[5..7] } else { month.as_str() };
+            label_spans.push(Span::styled(format!("{lbl:^3}"), Style::default().fg(FG3)));
+            label_spans.push(Span::raw(" "));
+        }
+        timeline_lines.push(Line::from(label_spans));
         timeline_lines.push(Line::raw(""));
 
-        // Labels + bar chart
+        // Horizontal bar chart per month
         for (month, val) in &months {
-            let bar_w = ((*val / max_month) * timeline_bar_max as f64).min(timeline_bar_max as f64) as usize;
+            let bar_w = ((*val / max_month) * timeline_bar_max as f64) as usize;
             let bar: String = "\u{2588}".repeat(bar_w.max(1));
-            let label = if month.len() >= 7 { &month[5..7] } else { month };
+            let label = if month.len() >= 7 {
+                format!("{}-{}", &month[2..4], &month[5..7])
+            } else {
+                month.clone()
+            };
             timeline_lines.push(Line::from(vec![
-                Span::styled(format!("  {label} "), Style::default().fg(FG2)),
+                Span::styled(format!(" {label:<5} "), Style::default().fg(FG2)),
                 Span::styled(bar, Style::default().fg(CYAN)),
                 Span::styled(format!(" {val:.0}"), Style::default().fg(FG2)),
             ]));
         }
     }
     let timeline_widget = Paragraph::new(timeline_lines)
-        .block(block("Monthly Spending"))
-        .wrap(Wrap { trim: false });
+        .block(block("Monthly Spending"));
     frame.render_widget(timeline_widget, bottom_area);
 }
 
