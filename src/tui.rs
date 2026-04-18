@@ -94,16 +94,18 @@ enum GroupTab {
     Members,
     Expenses,
     Debts,
+    Charts,
 }
 
 impl GroupTab {
-    const ALL: [GroupTab; 3] = [GroupTab::Members, GroupTab::Expenses, GroupTab::Debts];
+    const ALL: [GroupTab; 4] = [GroupTab::Members, GroupTab::Expenses, GroupTab::Debts, GroupTab::Charts];
 
     fn title(self) -> &'static str {
         match self {
             GroupTab::Members => " Members ",
             GroupTab::Expenses => " Expenses ",
             GroupTab::Debts => " Debts ",
+            GroupTab::Charts => " Charts ",
         }
     }
 
@@ -112,6 +114,7 @@ impl GroupTab {
             GroupTab::Members => 0,
             GroupTab::Expenses => 1,
             GroupTab::Debts => 2,
+            GroupTab::Charts => 3,
         }
     }
 
@@ -119,15 +122,17 @@ impl GroupTab {
         match self {
             GroupTab::Members => GroupTab::Expenses,
             GroupTab::Expenses => GroupTab::Debts,
-            GroupTab::Debts => GroupTab::Members,
+            GroupTab::Debts => GroupTab::Charts,
+            GroupTab::Charts => GroupTab::Members,
         }
     }
 
     fn prev(self) -> Self {
         match self {
-            GroupTab::Members => GroupTab::Debts,
+            GroupTab::Members => GroupTab::Charts,
             GroupTab::Expenses => GroupTab::Members,
             GroupTab::Debts => GroupTab::Expenses,
+            GroupTab::Charts => GroupTab::Debts,
         }
     }
 }
@@ -174,14 +179,13 @@ impl GroupView {
             GroupTab::Members => self.group.members.len(),
             GroupTab::Expenses => self.expenses.len(),
             GroupTab::Debts => self.debts().len(),
+            GroupTab::Charts => 0,
         }
     }
 
     fn move_down(&mut self) {
         let len = self.list_len();
-        if len == 0 {
-            return;
-        }
+        if len == 0 { return; }
         match self.tab {
             GroupTab::Members => {
                 let i = self.member_state.selected().map(|i| (i + 1) % len).unwrap_or(0);
@@ -191,17 +195,14 @@ impl GroupView {
                 let i = self.expense_state.selected().map(|i| (i + 1) % len).unwrap_or(0);
                 self.expense_state.select(Some(i));
             }
-            GroupTab::Debts => {
-                self.debt_idx = (self.debt_idx + 1) % len;
-            }
+            GroupTab::Debts => { self.debt_idx = (self.debt_idx + 1) % len; }
+            GroupTab::Charts => {}
         }
     }
 
     fn move_up(&mut self) {
         let len = self.list_len();
-        if len == 0 {
-            return;
-        }
+        if len == 0 { return; }
         match self.tab {
             GroupTab::Members => {
                 let i = self.member_state.selected().map(|i| if i == 0 { len - 1 } else { i - 1 }).unwrap_or(0);
@@ -214,29 +215,28 @@ impl GroupView {
             GroupTab::Debts => {
                 self.debt_idx = if self.debt_idx == 0 { len - 1 } else { self.debt_idx - 1 };
             }
+            GroupTab::Charts => {}
         }
     }
 
     fn jump_top(&mut self) {
-        if self.list_len() == 0 {
-            return;
-        }
+        if self.list_len() == 0 { return; }
         match self.tab {
             GroupTab::Members => self.member_state.select(Some(0)),
             GroupTab::Expenses => self.expense_state.select(Some(0)),
             GroupTab::Debts => self.debt_idx = 0,
+            GroupTab::Charts => {}
         }
     }
 
     fn jump_bottom(&mut self) {
         let len = self.list_len();
-        if len == 0 {
-            return;
-        }
+        if len == 0 { return; }
         match self.tab {
             GroupTab::Members => self.member_state.select(Some(len - 1)),
             GroupTab::Expenses => self.expense_state.select(Some(len - 1)),
             GroupTab::Debts => self.debt_idx = len - 1,
+            GroupTab::Charts => {}
         }
     }
 
@@ -482,6 +482,7 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App, client: &Client) ->
                         KeyCode::Char('1') => gv.tab = GroupTab::Members,
                         KeyCode::Char('2') => gv.tab = GroupTab::Expenses,
                         KeyCode::Char('3') => gv.tab = GroupTab::Debts,
+                        KeyCode::Char('4') => gv.tab = GroupTab::Charts,
                         KeyCode::Down | KeyCode::Char('j') => gv.move_down(),
                         KeyCode::Up | KeyCode::Char('k') => gv.move_up(),
                         KeyCode::Char('g') | KeyCode::Home => gv.jump_top(),
@@ -526,18 +527,21 @@ fn handle_mouse(app: &mut App, client: &Client, mouse: crossterm::event::MouseEv
                     gv.tab = GroupTab::ALL[idx];
                     return;
                 }
-                if let Some(clicked) = list_hit(app.areas.gv_list, col, row) {
-                    let (state, len) = match gv.tab {
-                        GroupTab::Members => (&mut gv.member_state, gv.group.members.len()),
-                        GroupTab::Expenses => (&mut gv.expense_state, gv.expenses.len()),
-                        GroupTab::Debts => {
-                            let len = gv.debts().len();
-                            gv.debt_idx = clicked.min(len.saturating_sub(1));
-                            return;
-                        }
-                    };
-                    let idx = clicked + state.offset();
-                    if idx < len { state.select(Some(idx)); }
+                if gv.tab != GroupTab::Charts {
+                    if let Some(clicked) = list_hit(app.areas.gv_list, col, row) {
+                        let (state, len) = match gv.tab {
+                            GroupTab::Members => (&mut gv.member_state, gv.group.members.len()),
+                            GroupTab::Expenses => (&mut gv.expense_state, gv.expenses.len()),
+                            GroupTab::Debts => {
+                                let len = gv.debts().len();
+                                gv.debt_idx = clicked.min(len.saturating_sub(1));
+                                return;
+                            }
+                            GroupTab::Charts => unreachable!(),
+                        };
+                        let idx = clicked + state.offset();
+                        if idx < len { state.select(Some(idx)); }
+                    }
                 }
             } else {
                 if let Some(idx) = tab_hit(app.areas.tab_bar, col, row, Tab::ALL.len()) {
@@ -714,16 +718,22 @@ fn render_group_view(frame: &mut Frame, app: &mut App) {
     frame.render_widget(tabs, tab_area);
 
     // ── Content ──
-    let [list_area, detail_area] =
-        Layout::horizontal([Constraint::Percentage(42), Constraint::Percentage(58)])
-            .areas(main_area);
-    app.areas.gv_list = list_area;
     let gv = app.group_view.as_mut().unwrap();
 
-    match gv.tab {
-        GroupTab::Members => render_gv_members(frame, gv, list_area, detail_area),
-        GroupTab::Expenses => render_gv_expenses(frame, gv, list_area, detail_area),
-        GroupTab::Debts => render_gv_debts(frame, gv, list_area, detail_area),
+    if gv.tab == GroupTab::Charts {
+        render_gv_charts(frame, gv, main_area);
+    } else {
+        let [list_area, detail_area] =
+            Layout::horizontal([Constraint::Percentage(42), Constraint::Percentage(58)])
+                .areas(main_area);
+        app.areas.gv_list = list_area;
+        let gv = app.group_view.as_mut().unwrap();
+        match gv.tab {
+            GroupTab::Members => render_gv_members(frame, gv, list_area, detail_area),
+            GroupTab::Expenses => render_gv_expenses(frame, gv, list_area, detail_area),
+            GroupTab::Debts => render_gv_debts(frame, gv, list_area, detail_area),
+            GroupTab::Charts => unreachable!(),
+        }
     }
 
     let help = status_bar(&[
@@ -862,6 +872,151 @@ fn render_gv_debts(frame: &mut Frame, gv: &mut GroupView, list_area: Rect, detai
     };
     let para = Paragraph::new(detail).block(detail_block("Debt")).wrap(Wrap { trim: false });
     frame.render_widget(para, detail_area);
+}
+
+// ── GV: Charts ──
+
+const SPARK: &[char] = &[' ', '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}', '\u{2587}', '\u{2588}'];
+
+fn render_gv_charts(frame: &mut Frame, gv: &GroupView, area: Rect) {
+    let [top_area, bottom_area] =
+        Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .areas(area);
+    let [spending_area, balance_area] =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .areas(top_area);
+
+    // ── Spending by member ──
+    let mut member_spending: std::collections::HashMap<u64, (String, f64)> =
+        std::collections::HashMap::new();
+    for e in &gv.expenses {
+        if e.deleted_at.is_some() { continue; }
+        for s in &e.users {
+            let paid: f64 = s.paid_share.parse().unwrap_or(0.0);
+            let name = display_name(s.first_name.as_deref().unwrap_or("?"), s.last_name.as_deref());
+            member_spending.entry(s.user_id)
+                .and_modify(|(_, total)| *total += paid)
+                .or_insert((name, paid));
+        }
+    }
+    let mut spending_sorted: Vec<(String, f64)> = member_spending.into_values().collect();
+    spending_sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    let max_spent = spending_sorted.iter().map(|(_, v)| *v).fold(0.0_f64, f64::max).max(1.0);
+    let bar_max = (spending_area.width as usize).saturating_sub(22).max(5);
+
+    let mut spending_lines: Vec<Line<'static>> = vec![
+        Line::raw(""),
+    ];
+    for (name, amount) in &spending_sorted {
+        let bar_w = ((*amount / max_spent) * bar_max as f64) as usize;
+        let bar: String = "\u{2588}".repeat(bar_w.max(1));
+        spending_lines.push(Line::from(vec![
+            Span::styled(format!("  {:<12} ", trunc(name, 12)), Style::default().fg(FG)),
+            Span::styled(bar, Style::default().fg(GREEN)),
+            Span::styled(format!(" {amount:.2}"), Style::default().fg(FG2)),
+        ]));
+    }
+    if spending_sorted.is_empty() {
+        spending_lines.push(Line::styled("  No spending data", Style::default().fg(FG3)));
+    }
+    let spending_widget = Paragraph::new(spending_lines)
+        .block(block("Spending by Member"))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(spending_widget, spending_area);
+
+    // ── Balance summary ──
+    let names = gv.member_names();
+    let debts = if !gv.group.simplified_debts.is_empty() {
+        &gv.group.simplified_debts
+    } else {
+        &gv.group.original_debts
+    };
+    let mut balance_lines: Vec<Line<'static>> = vec![Line::raw("")];
+    if debts.is_empty() {
+        balance_lines.push(Line::styled(
+            "  \u{2714} All settled up!",
+            Style::default().fg(GREEN),
+        ));
+    } else {
+        let max_debt = debts.iter()
+            .map(|d| d.amount.parse::<f64>().unwrap_or(0.0))
+            .fold(0.0_f64, f64::max)
+            .max(1.0);
+        let debt_bar_max = (balance_area.width as usize).saturating_sub(26).max(5);
+        for d in debts {
+            let from = names.get(&d.from).map(|s| s.as_str()).unwrap_or("?");
+            let to = names.get(&d.to).map(|s| s.as_str()).unwrap_or("?");
+            let amt: f64 = d.amount.parse().unwrap_or(0.0);
+            let bar_w = ((amt / max_debt) * debt_bar_max as f64) as usize;
+            let bar: String = "\u{2593}".repeat(bar_w.max(1));
+            balance_lines.push(Line::from(vec![
+                Span::styled(format!("  {:<10}", trunc(from, 10)), Style::default().fg(FG)),
+                Span::styled(" \u{2192} ", Style::default().fg(FG3)),
+                Span::styled(format!("{:<10} ", trunc(to, 10)), Style::default().fg(FG)),
+            ]));
+            balance_lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(bar, Style::default().fg(GOLD)),
+                Span::styled(format!(" {} {}", d.amount, d.currency_code), Style::default().fg(GOLD)),
+            ]));
+        }
+    }
+    let balance_widget = Paragraph::new(balance_lines)
+        .block(block("Who Owes Whom"))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(balance_widget, balance_area);
+
+    // ── Monthly spending timeline ──
+    let mut monthly: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+    for e in &gv.expenses {
+        if e.deleted_at.is_some() { continue; }
+        let month = e.date.as_deref()
+            .filter(|d| d.len() >= 7)
+            .map(|d| d[..7].to_string())
+            .unwrap_or_else(|| "Unknown".into());
+        let cost: f64 = e.cost.parse().unwrap_or(0.0);
+        *monthly.entry(month).or_default() += cost;
+    }
+    let months: Vec<(String, f64)> = monthly.into_iter().collect();
+    let max_month = months.iter().map(|(_, v)| *v).fold(0.0_f64, f64::max).max(1.0);
+    let timeline_bar_max = (bottom_area.width as usize).saturating_sub(6).max(5);
+
+    let mut timeline_lines: Vec<Line<'static>> = vec![Line::raw("")];
+    if months.is_empty() {
+        timeline_lines.push(Line::styled("  No expense data", Style::default().fg(FG3)));
+    } else {
+        // Sparkline row
+        let mut spark_spans: Vec<Span<'static>> = vec![Span::raw("  ")];
+        for (_, val) in &months {
+            let level = ((*val / max_month) * 8.0) as usize;
+            let ch = SPARK[level.min(8)];
+            let intensity = ((*val / max_month) * 255.0) as u8;
+            let color = Color::Rgb(28.min(28 + intensity / 4), 100 + intensity / 2, 60 + intensity / 3);
+            spark_spans.push(Span::styled(
+                format!("{ch}{ch}{ch}"),
+                Style::default().fg(color),
+            ));
+            spark_spans.push(Span::raw(" "));
+        }
+        timeline_lines.push(Line::from(spark_spans));
+        timeline_lines.push(Line::raw(""));
+
+        // Labels + bar chart
+        for (month, val) in &months {
+            let bar_w = ((*val / max_month) * timeline_bar_max as f64).min(timeline_bar_max as f64) as usize;
+            let bar: String = "\u{2588}".repeat(bar_w.max(1));
+            let label = if month.len() >= 7 { &month[5..7] } else { month };
+            timeline_lines.push(Line::from(vec![
+                Span::styled(format!("  {label} "), Style::default().fg(FG2)),
+                Span::styled(bar, Style::default().fg(CYAN)),
+                Span::styled(format!(" {val:.0}"), Style::default().fg(FG2)),
+            ]));
+        }
+    }
+    let timeline_widget = Paragraph::new(timeline_lines)
+        .block(block("Monthly Spending"))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(timeline_widget, bottom_area);
 }
 
 // ── Helpers ──
