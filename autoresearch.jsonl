@@ -1,1 +1,2 @@
 {"type":"config","name":"minimize binary size","metric":"binary_size_kb","unit":"KB","direction":"lower","created_at":"2026-04-18T00:00:00Z"}
+{"type":"run","iteration":1,"metric":"binary_size_kb","value":1696,"outcome":"keep","description":"Replace reqwest with ureq + release profile (strip, lto, opt-z, codegen-units 1, panic abort)","asi":{"hypothesis":"reqwest pulls tokio async runtime + TLS stack; ureq is sync-only with native TLS; release profile strips debug info and enables LTO","next_action_hint":"try disabling default features on ratatui and crossterm"}}

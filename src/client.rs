@@ -1,5 +1,4 @@
 use anyhow::{bail, Context, Result};
-use reqwest::blocking::Client as HttpClient;
 use serde::de::DeserializeOwned;
 
 use crate::models::*;
@@ -8,29 +7,23 @@ const BASE_URL: &str = "https://secure.splitwise.com/api/v3.0";
 
 pub struct Client {
     token: String,
-    http: HttpClient,
 }
 
 impl Client {
     pub fn new(token: String) -> Self {
-        Self {
-            token,
-            http: HttpClient::new(),
-        }
+        Self { token }
     }
 
     fn get<T: DeserializeOwned>(&self, path: &str, params: &[(&str, &str)]) -> Result<T> {
         let url = format!("{BASE_URL}{path}");
-        let resp = self
-            .http
-            .get(&url)
-            .bearer_auth(&self.token)
-            .query(params)
-            .send()
-            .with_context(|| format!("GET {path} failed"))?;
+        let mut req = ureq::get(&url).header("Authorization", &format!("Bearer {}", self.token));
+        for &(k, v) in params {
+            req = req.query(k, v);
+        }
+        let mut resp = req.call().with_context(|| format!("GET {path} failed"))?;
         let status = resp.status();
-        let body = resp.text()?;
-        if !status.is_success() {
+        let body = resp.body_mut().read_to_string()?;
+        if status.as_u16() >= 400 {
             bail!("API error ({status}): {body}");
         }
         serde_json::from_str(&body).with_context(|| format!("failed to parse GET {path} response"))
@@ -46,16 +39,13 @@ impl Client {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.token)
-            .form(&pairs)
-            .send()
+        let mut resp = ureq::post(&url)
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .send_form(pairs)
             .with_context(|| format!("POST {path} failed"))?;
         let status = resp.status();
-        let body = resp.text()?;
-        if !status.is_success() {
+        let body = resp.body_mut().read_to_string()?;
+        if status.as_u16() >= 400 {
             bail!("API error ({status}): {body}");
         }
         serde_json::from_str(&body)
@@ -245,15 +235,14 @@ impl Client {
 
     pub fn delete_comment(&self, id: u64) -> Result<()> {
         let url = format!("{BASE_URL}/delete_comment/{id}");
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.token)
-            .send()
+        let resp = ureq::post(&url)
+            .header("Authorization", &format!("Bearer {}", self.token))
+            .send_empty()
             .with_context(|| format!("POST /delete_comment/{id} failed"))?;
-        if !resp.status().is_success() {
+        if resp.status().as_u16() >= 400 {
             bail!("failed to delete comment {id}");
         }
+        drop(resp);
         Ok(())
     }
 
