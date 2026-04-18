@@ -523,7 +523,8 @@ fn handle_mouse(app: &mut App, client: &Client, mouse: crossterm::event::MouseEv
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
             if let Some(gv) = &mut app.group_view {
-                if let Some(idx) = tab_hit(app.areas.gv_sub_tabs, col, row, GroupTab::ALL.len()) {
+                let gv_titles: Vec<&str> = GroupTab::ALL.iter().map(|t| t.title()).collect();
+                if let Some(idx) = tab_hit(app.areas.gv_sub_tabs, col, row, &gv_titles) {
                     gv.tab = GroupTab::ALL[idx];
                     return;
                 }
@@ -544,7 +545,8 @@ fn handle_mouse(app: &mut App, client: &Client, mouse: crossterm::event::MouseEv
                     }
                 }
             } else {
-                if let Some(idx) = tab_hit(app.areas.tab_bar, col, row, Tab::ALL.len()) {
+                let tab_titles: Vec<&str> = Tab::ALL.iter().map(|t| t.title()).collect();
+                if let Some(idx) = tab_hit(app.areas.tab_bar, col, row, &tab_titles) {
                     app.tab = Tab::ALL[idx];
                     return;
                 }
@@ -575,14 +577,24 @@ fn handle_mouse(app: &mut App, client: &Client, mouse: crossterm::event::MouseEv
     }
 }
 
-fn tab_hit(area: Rect, col: u16, row: u16, count: usize) -> Option<usize> {
-    if area.width == 0 || count == 0 { return None; }
+fn tab_hit(area: Rect, col: u16, row: u16, titles: &[&str]) -> Option<usize> {
+    if area.width == 0 || titles.is_empty() { return None; }
+    // Content row is y+1 (top border)
     if row < area.y + 1 || row >= area.y + area.height.saturating_sub(1) { return None; }
     if col <= area.x || col >= area.x + area.width.saturating_sub(1) { return None; }
-    let inner_w = area.width.saturating_sub(2) as usize;
     let x_in = (col - area.x - 1) as usize;
-    let idx = x_in * count / inner_w;
-    if idx < count { Some(idx) } else { None }
+
+    // Tabs widget renders: title0 + divider + title1 + divider + ...
+    // Divider is " │ " = 3 chars
+    let mut pos = 0;
+    for (i, title) in titles.iter().enumerate() {
+        let w = title.len();
+        if x_in >= pos && x_in < pos + w {
+            return Some(i);
+        }
+        pos += w + 3; // title width + divider " │ "
+    }
+    None
 }
 
 fn list_hit(area: Rect, col: u16, row: u16) -> Option<usize> {
