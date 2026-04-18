@@ -1,5 +1,4 @@
 use anyhow::{bail, Context, Result};
-use reqwest::blocking::Client as HttpClient;
 use serde::de::DeserializeOwned;
 
 use crate::models::*;
@@ -8,32 +7,29 @@ const BASE_URL: &str = "https://secure.splitwise.com/api/v3.0";
 
 pub struct Client {
     token: String,
-    http: HttpClient,
 }
 
 impl Client {
     pub fn new(token: String) -> Self {
-        Self {
-            token,
-            http: HttpClient::new(),
-        }
+        Self { token }
+    }
+
+    fn auth_header(&self) -> String {
+        format!("Bearer {}", self.token)
     }
 
     fn get<T: DeserializeOwned>(&self, path: &str, params: &[(&str, &str)]) -> Result<T> {
         let url = format!("{BASE_URL}{path}");
-        let resp = self
-            .http
-            .get(&url)
-            .bearer_auth(&self.token)
-            .query(params)
-            .send()
-            .with_context(|| format!("GET {path} failed"))?;
-        let status = resp.status();
-        let body = resp.text()?;
-        if !status.is_success() {
-            bail!("API error ({status}): {body}");
+        let mut req = minreq::get(&url).with_header("Authorization", self.auth_header());
+        for &(k, v) in params {
+            req = req.with_param(k, v);
         }
-        serde_json::from_str(&body).with_context(|| format!("failed to parse GET {path} response"))
+        let resp = req.send().with_context(|| format!("GET {path} failed"))?;
+        if resp.status_code >= 400 {
+            bail!("API error ({}): {}", resp.status_code, resp.as_str().unwrap_or(""));
+        }
+        let body = resp.as_str().with_context(|| format!("invalid UTF-8 from GET {path}"))?;
+        serde_json::from_str(body).with_context(|| format!("failed to parse GET {path} response"))
     }
 
     fn post_form<T: DeserializeOwned>(
@@ -42,23 +38,27 @@ impl Client {
         form: &[(String, String)],
     ) -> Result<T> {
         let url = format!("{BASE_URL}{path}");
-        let pairs: Vec<(&str, &str)> = form
+        let encoded: String = form
             .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.token)
-            .form(&pairs)
+            .enumerate()
+            .fold(String::new(), |mut acc, (i, (k, v))| {
+                if i > 0 { acc.push('&'); }
+                acc.push_str(&urlenc(k));
+                acc.push('=');
+                acc.push_str(&urlenc(v));
+                acc
+            });
+        let resp = minreq::post(&url)
+            .with_header("Authorization", self.auth_header())
+            .with_header("Content-Type", "application/x-www-form-urlencoded")
+            .with_body(encoded)
             .send()
             .with_context(|| format!("POST {path} failed"))?;
-        let status = resp.status();
-        let body = resp.text()?;
-        if !status.is_success() {
-            bail!("API error ({status}): {body}");
+        if resp.status_code >= 400 {
+            bail!("API error ({}): {}", resp.status_code, resp.as_str().unwrap_or(""));
         }
-        serde_json::from_str(&body)
+        let body = resp.as_str().with_context(|| format!("invalid UTF-8 from POST {path}"))?;
+        serde_json::from_str(body)
             .with_context(|| format!("failed to parse POST {path} response"))
     }
 
@@ -245,13 +245,11 @@ impl Client {
 
     pub fn delete_comment(&self, id: u64) -> Result<()> {
         let url = format!("{BASE_URL}/delete_comment/{id}");
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.token)
+        let resp = minreq::post(&url)
+            .with_header("Authorization", self.auth_header())
             .send()
             .with_context(|| format!("POST /delete_comment/{id} failed"))?;
-        if !resp.status().is_success() {
+        if resp.status_code >= 400 {
             bail!("failed to delete comment {id}");
         }
         Ok(())
@@ -273,4 +271,21 @@ impl Client {
         let resp: CategoriesResponse = self.get("/get_categories", &[])?;
         Ok(resp.categories)
     }
+}
+
+fn urlenc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                out.push('%');
+                out.push(char::from(b"0123456789ABCDEF"[(b >> 4) as usize]));
+                out.push(char::from(b"0123456789ABCDEF"[(b & 0xf) as usize]));
+            }
+        }
+    }
+    out
 }
