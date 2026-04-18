@@ -1,0 +1,1 @@
+{"type":"config","name":"minimize binary size","metric":"binary_size_kb","unit":"KB","direction":"lower","created_at":"2026-04-18T00:00:00Z"}
