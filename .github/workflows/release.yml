@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  crates-io:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          cargo_ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          if [ "$tag" != "$cargo_ver" ]; then
+            echo "Tag $tag does not match Cargo.toml version $cargo_ver"
+            exit 1
+          fi
+      - run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  github-release:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf "../../../splitwise-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz" splitwise
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: splitwise-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+          fail_on_unmatched_files: true
