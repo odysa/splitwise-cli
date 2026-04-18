@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 fn config_path() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("could not determine home directory")?;
+    let home = home::home_dir().context("could not determine home directory")?;
     Ok(home.join(".splitwise-cli"))
 }
 
