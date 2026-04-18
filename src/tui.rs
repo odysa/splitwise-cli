@@ -887,13 +887,19 @@ fn render_gv_charts(frame: &mut Frame, gv: &GroupView, area: Rect) {
             .areas(top_area);
 
     // ── Spending by member ──
+    let names = gv.member_names();
     let mut member_spending: std::collections::HashMap<u64, (String, f64)> =
         std::collections::HashMap::new();
     for e in &gv.expenses {
         if e.deleted_at.is_some() { continue; }
         for s in &e.users {
             let paid: f64 = s.paid_share.parse().unwrap_or(0.0);
-            let name = display_name(s.first_name.as_deref().unwrap_or("?"), s.last_name.as_deref());
+            let name = names.get(&s.user_id).cloned().unwrap_or_else(|| {
+                display_name(
+                    s.first_name.as_deref().unwrap_or("Unknown"),
+                    s.last_name.as_deref(),
+                )
+            });
             member_spending.entry(s.user_id)
                 .and_modify(|(_, total)| *total += paid)
                 .or_insert((name, paid));
@@ -924,7 +930,6 @@ fn render_gv_charts(frame: &mut Frame, gv: &GroupView, area: Rect) {
     frame.render_widget(spending_widget, spending_area);
 
     // ── Balance summary ──
-    let names = gv.member_names();
     let debts = if !gv.group.simplified_debts.is_empty() {
         &gv.group.simplified_debts
     } else {
