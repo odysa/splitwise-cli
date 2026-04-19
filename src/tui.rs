@@ -523,8 +523,7 @@ fn handle_mouse(app: &mut App, client: &Client, mouse: crossterm::event::MouseEv
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
             if let Some(gv) = &mut app.group_view {
-                let gv_titles: Vec<&str> = GroupTab::ALL.iter().map(|t| t.title()).collect();
-                if let Some(idx) = tab_hit(app.areas.gv_sub_tabs, col, row, &gv_titles) {
+                if let Some(idx) = tab_hit(app.areas.gv_sub_tabs, col, row, GroupTab::ALL.iter().map(|t| t.title())) {
                     gv.tab = GroupTab::ALL[idx];
                     return;
                 }
@@ -545,8 +544,7 @@ fn handle_mouse(app: &mut App, client: &Client, mouse: crossterm::event::MouseEv
                     }
                 }
             } else {
-                let tab_titles: Vec<&str> = Tab::ALL.iter().map(|t| t.title()).collect();
-                if let Some(idx) = tab_hit(app.areas.tab_bar, col, row, &tab_titles) {
+                if let Some(idx) = tab_hit(app.areas.tab_bar, col, row, Tab::ALL.iter().map(|t| t.title())) {
                     app.tab = Tab::ALL[idx];
                     return;
                 }
@@ -577,22 +575,20 @@ fn handle_mouse(app: &mut App, client: &Client, mouse: crossterm::event::MouseEv
     }
 }
 
-fn tab_hit(area: Rect, col: u16, row: u16, titles: &[&str]) -> Option<usize> {
-    if area.width == 0 || titles.is_empty() { return None; }
-    // Content row is y+1 (top border)
+fn tab_hit<'a>(area: Rect, col: u16, row: u16, titles: impl IntoIterator<Item = &'a str>) -> Option<usize> {
+    if area.width == 0 { return None; }
     if row < area.y + 1 || row >= area.y + area.height.saturating_sub(1) { return None; }
     if col <= area.x || col >= area.x + area.width.saturating_sub(1) { return None; }
     let x_in = (col - area.x - 1) as usize;
 
-    // Tabs widget renders: title0 + divider + title1 + divider + ...
-    // Divider is " │ " = 3 chars
+    // ratatui Tabs renders: title₀ + " │ " + title₁ + " │ " + … — divider is 3 chars.
     let mut pos = 0;
-    for (i, title) in titles.iter().enumerate() {
-        let w = title.len();
+    for (i, title) in titles.into_iter().enumerate() {
+        let w = title.chars().count();
         if x_in >= pos && x_in < pos + w {
             return Some(i);
         }
-        pos += w + 3; // title width + divider " │ "
+        pos += w + 3;
     }
     None
 }
@@ -906,21 +902,22 @@ fn render_gv_charts(frame: &mut Frame, gv: &GroupView, area: Rect) {
         if e.deleted_at.is_some() { continue; }
         for s in &e.users {
             let paid: f64 = s.paid_share.parse().unwrap_or(0.0);
-            let name = names.get(&s.user_id).cloned().unwrap_or_else(|| {
-                display_name(
-                    s.first_name.as_deref().unwrap_or("Unknown"),
-                    s.last_name.as_deref(),
-                )
-            });
             member_spending.entry(s.user_id)
                 .and_modify(|(_, total)| *total += paid)
-                .or_insert((name, paid));
+                .or_insert_with(|| {
+                    let name = names.get(&s.user_id).cloned().unwrap_or_else(|| {
+                        display_name(
+                            s.first_name.as_deref().unwrap_or("?"),
+                            s.last_name.as_deref(),
+                        )
+                    });
+                    (name, paid)
+                });
         }
     }
     let mut spending_sorted: Vec<(String, f64)> = member_spending.into_values().collect();
     spending_sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     let max_spent = spending_sorted.iter().map(|(_, v)| *v).fold(0.0_f64, f64::max).max(1.0);
-    // inner width = panel width - 2 (borders); label "  name          " = 16; " amount" = 10
     let inner_w = (spending_area.width as usize).saturating_sub(2);
     let bar_max = inner_w.saturating_sub(26).max(1);
 
@@ -959,7 +956,6 @@ fn render_gv_charts(frame: &mut Frame, gv: &GroupView, area: Rect) {
             .map(|d| d.amount.parse::<f64>().unwrap_or(0.0))
             .fold(0.0_f64, f64::max)
             .max(1.0);
-        // debt line: "  from       → to          " = ~28; " amount CUR" = ~14
         let debt_bar_max = bal_inner.saturating_sub(18).max(1);
         for d in debts {
             let from = names.get(&d.from).map(|s| s.as_str()).unwrap_or("?");
@@ -998,15 +994,14 @@ fn render_gv_charts(frame: &mut Frame, gv: &GroupView, area: Rect) {
     let months: Vec<(String, f64)> = monthly.into_iter().collect();
     let max_month = months.iter().map(|(_, v)| *v).fold(0.0_f64, f64::max).max(1.0);
     let tl_inner = (bottom_area.width as usize).saturating_sub(2);
-    // label "  MM " = 5; " amount" = 10
     let timeline_bar_max = tl_inner.saturating_sub(16).max(1);
 
     let mut timeline_lines: Vec<Line<'static>> = vec![Line::raw("")];
     if months.is_empty() {
         timeline_lines.push(Line::styled("  No expense data", Style::default().fg(FG3)));
     } else {
-        // Sparkline row — cap to inner width
-        let spark_max = (tl_inner.saturating_sub(2)) / 4; // each spark = 3 chars + 1 space
+        // Each sparkline cell is 3 glyphs + 1 space, so 4 columns per month.
+        let spark_max = (tl_inner.saturating_sub(2)) / 4;
         let spark_months: &[(String, f64)] = if months.len() > spark_max {
             &months[months.len() - spark_max..]
         } else {
@@ -1025,7 +1020,6 @@ fn render_gv_charts(frame: &mut Frame, gv: &GroupView, area: Rect) {
         }
         timeline_lines.push(Line::from(spark_spans));
 
-        // Month labels under sparkline
         let mut label_spans: Vec<Span<'static>> = vec![Span::raw(" ")];
         for (month, _) in spark_months {
             let lbl = if month.len() >= 7 { &month[5..7] } else { month.as_str() };
@@ -1035,7 +1029,6 @@ fn render_gv_charts(frame: &mut Frame, gv: &GroupView, area: Rect) {
         timeline_lines.push(Line::from(label_spans));
         timeline_lines.push(Line::raw(""));
 
-        // Horizontal bar chart per month
         for (month, val) in &months {
             let bar_w = ((*val / max_month) * timeline_bar_max as f64) as usize;
             let bar: String = "\u{2588}".repeat(bar_w.max(1));
