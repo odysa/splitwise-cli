@@ -12,6 +12,8 @@ jobs:
   crates-io:
     name: Publish to crates.io
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -24,9 +26,12 @@ jobs:
             echo "Tag $tag does not match Cargo.toml version $cargo_ver"
             exit 1
           fi
+      - name: Authenticate to crates.io via Trusted Publishing
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
       - run: cargo publish
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   github-release:
     name: Build (${{ matrix.target }})
